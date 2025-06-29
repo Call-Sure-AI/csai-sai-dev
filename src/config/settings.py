@@ -3,6 +3,7 @@ import json
 from typing import Dict, List, Union, ClassVar, Any, Set, Optional
 from dotenv import load_dotenv
 from pydantic_settings import BaseSettings
+from pydantic import ConfigDict
 
 # Load environment variables from .env file
 load_dotenv()
@@ -32,7 +33,11 @@ ENV_VARS = {
    "GPT_API_KEY": {"required": False},
    "DEFAULT_GPT_MODEL": {"default": "gpt-4o"},
    "DEFAULT_EMBEDDING_MODEL": {"default": "text-embedding-3-small"},
-   
+
+    # Anthropic Claude API
+    "CLAUDE_API_KEY": {"required": False},
+    "DEFAULT_CLAUDE_MODEL": {"default": "claude-4-sonnet-20250522"},
+
    # Logging
    "LOG_DIR": {"default": "./logs"},
    "LOG_LEVEL": {"default": "INFO"},
@@ -253,7 +258,11 @@ class Settings(BaseSettings):
     OPENAI_API_KEY: str = env_values.get("OPENAI_API_KEY", "")
     OPENAI_MODEL: str = env_values.get("OPENAI_MODEL", "gpt-4")
     OPENAI_EMBEDDING_MODEL: str = env_values.get("OPENAI_EMBEDDING_MODEL", "text-embedding-3-small")
-    
+
+    # Anthropic Claude
+    CLAUDE_API_KEY: str = env_values.get("CLAUDE_API_KEY", "")
+    DEFAULT_CLAUDE_MODEL: str = env_values.get("DEFAULT_CLAUDE_MODEL", "claude-4-sonnet-20250522")
+
     # Qdrant Settings
     QDRANT_HOST: str = env_values.get("QDRANT_HOST", "qdrant.callsure.ai")
     QDRANT_PORT: int = env_values.get("QDRANT_PORT", 443)
@@ -321,9 +330,8 @@ class Settings(BaseSettings):
             
         return f"postgresql://{self.DATABASE_USER}:{self.DATABASE_PASSWORD}@{self.DATABASE_HOST}/{self.DATABASE_NAME}?sslmode=require"
     
-    class Config:
-        env_file = ".env"
-        
+    model_config = ConfigDict(env_file=".env", extra="allow")
+
     def model_post_init(self, *args, **kwargs):
         """Post initialization hook to set DATABASE_URL if not provided"""
         if not self.DATABASE_URL:

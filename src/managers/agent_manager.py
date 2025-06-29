@@ -4,8 +4,9 @@ import logging
 from datetime import datetime
 import uuid
 import asyncio
-from database.models import Agent, Company, Document, Conversation, AgentInteraction
-from config.settings import settings
+from src.database.models import Agent, Company, Document, Conversation, Conversation, AgentInteraction, AgentType
+
+from src.config.settings import settings
 import time
 
 logger = logging.getLogger(__name__)
@@ -19,92 +20,57 @@ class AgentManager:
         self.conversation_cache = {}
         self._initialization_locks = {}
 
-    # async def ensure_base_agent(self, company_id: str) -> Optional[Dict[str, Any]]:
-    #     """Ensure base agent exists for company"""
-    #     try:
-    #         base_agent = await self.get_base_agent(company_id)
-    #         if base_agent:
-    #             return base_agent
-
-    #         # Create default base agent
-    #         agent_id = str(uuid.uuid4())
-    #         base_agent = Agent(
-    #             id=agent_id,
-    #             company_id=company_id,
-    #             name="Base Agent",
-    #             type="base",
-    #             prompt="You are a helpful AI assistant.",
-    #             confidence_threshold=0.0,
-    #             active=True
-    #         )
-
-    #         self.db.add(base_agent)
-    #         self.db.commit()
-
-    #         agent_info = {
-    #             "id": agent_id,
-    #             "name": base_agent.name,
-    #             "type": base_agent.type,
-    #             "prompt": base_agent.prompt,
-    #             "confidence_threshold": base_agent.confidence_threshold
-    #         }
-
-    #         self.agent_cache[agent_id] = agent_info
-    #         return agent_info
-
-    #     except Exception as e:
-    #         logger.error(f"Error ensuring base agent: {str(e)}")
-    #         return None
-
     async def ensure_base_agent(self, company_id: str) -> Optional[Dict[str, Any]]:
-        """Ensure base agent exists for company"""
+        """Ensure base agent exists for a company."""
+        logger.debug(f"Ensuring base agent exists for company_id: {company_id}")
         try:
             base_agent = await self.get_base_agent(company_id)
             if base_agent:
+                logger.debug(f"Base agent found in cache/DB for company_id: {company_id}")
                 return base_agent
 
-            # Get company to get the user_id
+            logger.info(f"No base agent found for company_id: {company_id}. Creating one.") # Get company to get the user_id
             company = self.db.query(Company).filter_by(id=company_id).first()
             if not company:
-                logger.error(f"Company {company_id} not found")
+                logger.error(f"Cannot create base agent: Company {company_id} not found.")
                 return None
-                
+
             # Get user_id from company
             user_id = company.user_id
             if not user_id:
-                logger.error(f"No user_id found for company {company_id}")
+                logger.error(f"Cannot create base agent: No user_id found for company {company_id}")
                 return None
 
-            # Create default base agent with user_id from company
+            # Create and commit the new base agent
             agent_id = str(uuid.uuid4())
-            base_agent = Agent(
+            new_base_agent = Agent(
                 id=agent_id,
                 company_id=company_id,
-                user_id=user_id,  # Use user_id from company
+                user_id=company.user_id,
                 name="Base Agent",
-                type="base",
+                type=AgentType.base,
                 prompt="You are a helpful AI assistant.",
                 confidence_threshold=0.0,
-                is_active=True  # Changed from active to is_active
+                is_active=True
             )
-
-            self.db.add(base_agent)
+            self.db.add(new_base_agent)
             self.db.commit()
+            logger.info(f"Successfully created base agent {agent_id} for company {company_id}.")
 
             agent_info = {
                 "id": agent_id,
-                "name": base_agent.name,
-                "type": base_agent.type,
-                "prompt": base_agent.prompt,
-                "confidence_threshold": base_agent.confidence_threshold
+                "name": new_base_agent.name,
+                "type": new_base_agent.type.value, # Use .value for enums
+                "prompt": new_base_agent.prompt,
+                "confidence_threshold": new_base_agent.confidence_threshold,
+                "additional_context": new_base_agent.additional_context if new_base_agent.additional_context else None
             }
-
             self.agent_cache[agent_id] = agent_info
             return agent_info
 
         except Exception as e:
-            logger.error(f"Error ensuring base agent: {str(e)}")
-            self.db.rollback()  # Add rollback on exception
+            logger.error(f"Error ensuring base agent for company {company_id}: {e}", exc_info=True)
+            self.db.rollback()
             return None
         
     async def initialize_company_agents(self, company_id: str) -> None:
@@ -141,7 +107,7 @@ class AgentManager:
                         "confidence_threshold": agent.confidence_threshold,
                         "additional_context": agent.additional_context
                     }
-                    
+
                     self.agent_cache[agent.id] = agent_info
                     self.company_agents_cache[company_id].append(agent.id)
 
@@ -272,14 +238,18 @@ class AgentManager:
         query: str,
         current_agent_id: Optional[str] = None
     ) -> Tuple[Optional[str], float]:
-        """Find best agent using pre-computed embeddings"""
+        """Find best agent  for a given query using vector search using pre-computed embeddings"""
+        logger.info(f"Finding best agent for company {company_id} with query: '{query[:30]}...'")
+        start_time = time.time()
         try:
             if company_id not in self.company_agents_cache:
                 await self.initialize_company_agents(company_id)
 
             # Get query embedding from cache or compute
             query_embedding = await self.vector_store.get_query_embedding(query)
-            
+
+            logger.debug("Performing vector search for relevant agent.")
+
             # Search with embedding
             results = await self.vector_store.search(
                 company_id=company_id,
@@ -287,19 +257,28 @@ class AgentManager:
                 current_agent_id=current_agent_id
             )
 
+            duration = time.time() - start_time
+            logger.debug(f"Vector search completed in {duration:.3f} seconds.")
+
             if not results:
+                logger.warning(f"No specific agent found for query. Falling back to base agent for company {company_id}.")
                 base_agent = await self.get_base_agent(company_id)
                 return base_agent['id'] if base_agent else None, 0.0
 
             best_result = results[0]
-            return best_result['agent_id'], best_result['score']
+            agent_id = best_result['agent_id']
+            score = best_result['score']
+            logger.info(f"Found best agent: {agent_id} with a confidence score of {score:.2f}")
+
+            return agent_id, score
 
         except Exception as e:
-            logger.error(f"Error finding best agent: {str(e)}")
+            logger.error(f"Error finding best agent for company {company_id}: {e}", exc_info=True)
             if current_agent_id:
                 return current_agent_id, 0.0
+            # Safe fallback
             base_agent = await self.get_base_agent(company_id)
-            return base_agent['id'] if base_agent else None, 0.0
+            return (base_agent['id'] if base_agent else None), 0.0
 
     async def update_conversation(
         self,

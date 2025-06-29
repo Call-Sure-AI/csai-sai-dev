@@ -53,7 +53,7 @@ last_speech_timestamps = {}
 # Processing flags to avoid duplicate processing
 is_processing = {}
 # Silence threshold in seconds
-SILENCE_THRESHOLD = 2.0
+SILENCE_THRESHOLD = 1.5
 
 
 async def handle_audio_stream(peer_id: str, audio_data: bytes, manager: WebRTCManager, app: FastAPI):

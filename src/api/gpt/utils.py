@@ -49,7 +49,7 @@ def validate_gpt_message_format(messages: List[Dict[str, str]]) -> bool:
         if "role" not in message or "content" not in message:
             logging.error("Each message must contain 'role' and 'content' keys.")
             return False
-        if message["role"] not in {"developer", "user", "assistant"}:
+        if message["role"] not in {"system", "user", "assistant"}:
             logging.error(f"Invalid role in message: {message['role']}")
             return False
         if not isinstance(message["content"], str):

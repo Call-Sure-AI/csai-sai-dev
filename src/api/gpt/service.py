@@ -57,8 +57,9 @@ async def stream_text_response(messages: List[dict], model: str = DEFAULT_GPT_MO
         )
 
         async for chunk in stream:
-            if "choices" in chunk and chunk.choices[0].delta.content is not None:
-                yield chunk.choices[0].delta.content
+            content = chunk.choices[0].delta.content
+            if content is not None:
+                yield content
     except Exception as e:
         logging.error(f"Error during GPT streaming: {e}")
         raise RuntimeError(f"Error during GPT streaming: {e}") from e
