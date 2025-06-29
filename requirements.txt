@@ -1,93 +1,87 @@
+# FILE: requirements.txt
 # FastAPI and ASGI server
-fastapi==0.111.0
-uvicorn[standard]==0.29.0
+fastapi
+uvicorn[standard]
 
 # AWS S3 integration
-boto3==1.34.34
-aioboto3==12.3.0
+boto3
+aioboto3
 
 # Database
-psycopg2-binary~=2.9.9
-asyncpg~=0.29.0
-SQLAlchemy~=2.0.30
+psycopg2-binary
+asyncpg
+SQLAlchemy
 
-# Vector Databases and Search
-# Pinning chromadb and qdrant-client resolves the main dependency conflict.
-chromadb==0.5.0
-qdrant-client==1.9.0
-pinecone-client~=4.1.1
+# Vector Databases
+qdrant-client
+chromadb
 
-# LLM Providers and Utilities
-openai~=1.30.0
-anthropic~=0.29.0
-langchain==0.1.20
-langchain-core==0.1.52
-langchain-community==0.0.38
-langchain-openai==0.1.6
-transformers~=4.41.2 # For local models
-tiktoken~=0.7.0
+# OpenAI GPT API and LLM utilities
+openai
+anthropic
+langchain
+langchain-openai
+langchain-community
+langchain-core
+transformers
+tiktoken
 
-# Fine-tuning and dataset handling (Optional but pinned)
-peft~=0.11.1
-bitsandbytes~=0.43.1
+# Fine-tuning and dataset handling (optional, uncomment if needed)
+# peft
+# bitsandbytes
 # datasets
 
 # Environment variable management
-python-dotenv~=1.0.1
+python-dotenv
+pydantic-settings
 
-# Logging and Observability (Pinned to versions compatible with chromadb)
-loguru~=0.7.2
-opentelemetry-api==1.25.0
-opentelemetry-sdk==1.25.0
+# Logging and Observability
+loguru
+opentelemetry-api
+opentelemetry-sdk
 
 # Async HTTP requests
-httpx~=0.27.0
-aiohttp~=3.9.5
+httpx
+aiohttp
 
 # Testing and Mocking
-pytest~=8.2.2
-pytest-asyncio~=0.23.7
-pytest-mock~=3.14.0
+pytest
+pytest-asyncio
+pytest-mock
 
 # Authentication and Security
-pyjwt~=2.8.0
+pyjwt
 
 # Redis Caching and Rate Limiting
-redis~=5.0.5
-
-# Development Tools
-black~=24.4.2
-isort~=5.13.2
-flake8~=7.0.0
+redis
 
 # WebRTC and Real-time Communication
-websockets~=12.0
-cryptography~=42.0.7
-pyee~=11.1.0
-aiodns~=3.2.0
-python-multipart~=0.0.9
-google-crc32c~=1.5.0
-# aiortc (Commented out as in original)
-# av (Commented out as in original)
+websockets
+cryptography
+pyee
+aiodns
+python-multipart
+google-crc32c
+# aiortc # Uncomment if using direct WebRTC media handling
 
-# Data Handling and Parsing
-pandas~=2.2.2
-python-magic~=0.4.27
-beautifulsoup4~=4.12.3
-aiofiles~=23.2.1
-PyPDF2~=3.0.1
+# Data Handling & Document Processing
+pandas
+PyPDF2
+python-magic
+# textract # Can have heavy dependencies
+beautifulsoup4
+aiofiles
 
-# Optional WebRTC Media Extensions
-# numpy (Often a dependency of other packages like pandas)
-opencv-python-headless~=4.9.0.80
-sounddevice~=0.4.7
-
-# Calendar and Google API Services
-google-auth~=2.29.0
-google-auth-oauthlib~=1.2.0
-google-auth-httplib2~=0.2.0
-google-api-python-client~=2.134.0
-O365~=2.0.29
-tenacity~=8.3.0
+# Calendar Integrations
+google-auth>=2.0.0
+google-auth-oauthlib>=1.0.0
+google-auth-httplib2>=0.1.0
+google-api-python-client>=2.0.0
+O365>=2.0.0
+tenacity>=8.0.0
 pytz>=2024.1
-pydantic-settings
+
+# Development Tools
+black
+isort
+flake8

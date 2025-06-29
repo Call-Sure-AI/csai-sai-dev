@@ -1,91 +1,106 @@
+# FILE: src/app.py
 from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware
+from starlette.middleware.cors import CORSMiddleware
+from starlette.responses import RedirectResponse
 import logging
 
-from config.settings_manager import get_settings, validate_startup_configuration
-from config.logging_config import setup_logging
-from di.container import Container, configure_container
-from routes import webrtc_handlers, admin_routes_handlers
-from middleware.error_handler import add_error_handlers
-
-# Validate configuration first
-validate_startup_configuration()
-settings = get_settings()
-
-# Setup logging
-setup_logging(
-    log_level=settings.log_level,
-    log_file=settings.log_file,
-    app_name=settings.app_name
-)
+from managers.connection_manager import ConnectionManager
+from services.vector_store.qdrant_service import QdrantService
+from services.webrtc.manager import WebRTCManager
 
 logger = logging.getLogger(__name__)
 
-# Configure DI container
-configure_container()
-container = Container()
+from config.settings import ALLOWED_ORIGINS, DEBUG, APP_PREFIX
+from routes.healthcheck_handlers import healthcheck_router
+from routes.webrtc_handlers import router as webrtc_router
+from routes.admin_routes_handlers import router as admin_router
+from routes.twilio_handlers import router as twilio_router
+from routes.exotel_routes_handlers import router as exotel_router
+from routes.ticket_routes import router as ticket_router
+# from routes.ai_routes_handlers import ai_router
+# from routes.voice_routes_handlers import voice_router
+# from routes.calendar_routes_handlers import calendar_router
+# from routes.google_sheets_routes import router as google_sheets_router
+# from routes.websocket_handlers import router as websocket_router
 
-# Create FastAPI app
+logger.info("allow_origins: %s", ALLOWED_ORIGINS)
 app = FastAPI(
-    title=settings.app_name,
-    version=settings.app_version,
-    debug=settings.debug,
-    description="Modular AI Backend Service with Clean Architecture"
+    title="AI Backend",
+    version="1.0.0",
+    debug=DEBUG,
+    description="AI Backend Service"
 )
 
 # Add CORS middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=settings.cors_origins,
+    allow_origins=ALLOWED_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=["*"]
 )
 
-# Add error handlers
-add_error_handlers(app)
-
-# Wire DI container
-container.wire(modules=[
-    "routes.webrtc_handlers",
-    "routes.admin_routes_handlers"
-])
+# Root route redirects to docs
+@app.get("/")
+async def root():
+    return RedirectResponse(url="/docs")
 
 # Include routers
-app.include_router(
-    webrtc_handlers.router, 
-    prefix="/api/v1/webrtc", 
-    tags=["WebRTC"]
-)
-app.include_router(
-    admin_routes_handlers.router, 
-    prefix="/api/v1/admin", 
-    tags=["Admin"]
-)
+app.include_router(healthcheck_router, prefix=f"{APP_PREFIX}/health", tags=["Health"])
+app.include_router(webrtc_router, prefix=f"{APP_PREFIX}/webrtc", tags=["WebRTC"])
+app.include_router(admin_router, prefix=f"{APP_PREFIX}/admin", tags=["Admin"])
+app.include_router(twilio_router, prefix=f"{APP_PREFIX}/twilio", tags=["Twilio"])
+app.include_router(exotel_router, prefix=f"{APP_PREFIX}/exotel", tags=["Exotel"])
+app.include_router(ticket_router, prefix=f"{APP_PREFIX}/tickets", tags=["Tickets"])
+# app.include_router(ai_router, prefix=f"{APP_PREFIX}/ai", tags=["AI"])
+# app.include_router(voice_router, prefix=f"{APP_PREFIX}/voice", tags=["Voice"])
+# app.include_router(calendar_router, prefix=f"{APP_PREFIX}/calendar", tags=["Calendar"])
+# app.include_router(google_sheets_router, prefix=f"{APP_PREFIX}/google_sheets", tags=["Google Sheets"])
+# app.include_router(websocket_router, prefix=f"{APP_PREFIX}/ws", tags=["websocket"])
 
 @app.on_event("startup")
 async def startup_event():
-    """Application startup"""
-    logger.info(f"Starting {settings.app_name} v{settings.app_version}")
-    logger.info(f"Environment: {settings.environment}")
-    logger.info(f"Debug mode: {settings.debug}")
+    try:
+        # Initialize vector store
+        vector_store = QdrantService()
+        logger.info("Vector store initialized")
+
+        # Initialize connection manager WITHOUT a shared DB session
+        # The manager will handle its own session lifecycle.
+        connection_manager = ConnectionManager(vector_store)
+        app.state.connection_manager = connection_manager
+        logger.info("Connection manager initialized")
+
+        # Initialize WebRTC manager
+        webrtc_manager = WebRTCManager()
+        webrtc_manager.connection_manager = connection_manager
+        app.state.webrtc_manager = webrtc_manager
+        logger.info("WebRTC manager initialized")
+
+        # Initialize additional state
+        app.state.response_cache = {}
+        app.state.stream_sids = {}
+        app.state.call_mappings = {}
+        app.state.client_call_mapping = {}
+        app.state.transcripts = {}
+
+        logger.info("Initialized shared application state")
+    except Exception as e:
+        logger.critical(f"Failed to initialize application: {str(e)}", exc_info=True)
+        raise
 
 @app.on_event("shutdown")
 async def shutdown_event():
-    """Application shutdown"""
-    logger.info("Shutting down application")
-    # Cleanup would be handled by DI container
-
-@app.get("/")
-async def root():
-    """Root endpoint"""
-    return {
-        "service": settings.app_name,
-        "version": settings.app_version,
-        "status": "running"
-    }
-
-@app.get("/health")
-async def health_check():
-    """Basic health check"""
-    return {"status": "healthy"}
+    try:
+        # Close any active connections
+        if hasattr(app.state, "connection_manager"):
+            await app.state.connection_manager.close_all_connections()
+        
+        # Close WebRTC connections
+        if hasattr(app.state, "webrtc_manager"):
+            await app.state.webrtc_manager.close_all_connections()
+            
+        logger.info("Application shutdown complete")
+    except Exception as e:
+        logger.error(f"Error during application shutdown: {str(e)}")

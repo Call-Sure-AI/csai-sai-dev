@@ -9,6 +9,7 @@ from core.interfaces.services import IConnectionService, IAnalyticsService, IAge
 from core.interfaces.repositories import IClientRepository, IAgentRepository
 from core.entities.client import ClientSession, ConnectionState
 from core.entities.analytics import SessionEvent, EventType
+from database.config import get_db
 
 logger = logging.getLogger(__name__)
 
