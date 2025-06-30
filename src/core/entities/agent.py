@@ -388,7 +388,7 @@ class Agent:
     updated_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     
     # Capabilities and configuration
-    capabilities: Set[AgentCapability] = field(default_factory=set)
+    capabilities: Optional[Set[AgentCapability]] = None
     config: AgentConfig = field(default_factory=lambda: AgentConfig(model_name="gpt-3.5-turbo"))
     
     # State and status
@@ -414,6 +414,7 @@ class Agent:
     webhook_url: Optional[str] = None
     api_keys: Dict[str, str] = field(default_factory=dict)
     
+    # In the Agent class
     def __post_init__(self):
         """Post-initialization validation and setup."""
         if not self.id:
@@ -426,41 +427,47 @@ class Agent:
             self.created_at = self.created_at.replace(tzinfo=timezone.utc)
         if self.updated_at.tzinfo is None:
             self.updated_at = self.updated_at.replace(tzinfo=timezone.utc)
+            
+        # ** THE FIX IS HERE **
+        # Only set default capabilities if none were provided at all.
+        if self.capabilities is None:
+            self._set_default_capabilities()
         
-        # Set default capabilities based on agent type
-        self._set_default_capabilities()
-    
+        # If an empty set was passed, self.capabilities will be set() and this block is skipped.
+
     def _set_default_capabilities(self) -> None:
         """Set default capabilities based on agent type."""
-        if not self.capabilities:  # Only set if no capabilities are explicitly provided
-            if self.agent_type == AgentType.CONVERSATIONAL:
-                self.capabilities = {
-                    AgentCapability.TEXT_GENERATION,
-                    AgentCapability.CONTEXT_MEMORY,
-                    AgentCapability.SENTIMENT_ANALYSIS
-                }
-            elif self.agent_type == AgentType.VOICE_SPECIALIZED:
-                self.capabilities = {
-                    AgentCapability.TEXT_GENERATION,
-                    AgentCapability.VOICE_SYNTHESIS,
-                    AgentCapability.VOICE_RECOGNITION,
-                    AgentCapability.REAL_TIME_PROCESSING
-                }
-            elif self.agent_type == AgentType.FUNCTION_CALLING:
-                self.capabilities = {
-                    AgentCapability.TEXT_GENERATION,
-                    AgentCapability.FUNCTION_CALLING,
-                    AgentCapability.CONTEXT_MEMORY
-                }
-            elif self.agent_type == AgentType.CUSTOMER_SERVICE:
-                self.capabilities = {
-                    AgentCapability.TEXT_GENERATION,
-                    AgentCapability.SENTIMENT_ANALYSIS,
-                    AgentCapability.KNOWLEDGE_RETRIEVAL,
-                    AgentCapability.FUNCTION_CALLING
-                }
-            else:
-                self.capabilities = {AgentCapability.TEXT_GENERATION}
+        # This method is now only called when self.capabilities is None.
+        
+        if self.agent_type == AgentType.CONVERSATIONAL:
+            self.capabilities = {
+                AgentCapability.TEXT_GENERATION,
+                AgentCapability.CONTEXT_MEMORY,
+                AgentCapability.SENTIMENT_ANALYSIS
+            }
+        elif self.agent_type == AgentType.VOICE_SPECIALIZED:
+            self.capabilities = {
+                AgentCapability.TEXT_GENERATION,
+                AgentCapability.VOICE_SYNTHESIS,
+                AgentCapability.VOICE_RECOGNITION,
+                AgentCapability.REAL_TIME_PROCESSING
+            }
+        elif self.agent_type == AgentType.FUNCTION_CALLING:
+            self.capabilities = {
+                AgentCapability.TEXT_GENERATION,
+                AgentCapability.FUNCTION_CALLING,
+                AgentCapability.CONTEXT_MEMORY
+            }
+        elif self.agent_type == AgentType.CUSTOMER_SERVICE:
+            self.capabilities = {
+                AgentCapability.TEXT_GENERATION,
+                AgentCapability.SENTIMENT_ANALYSIS,
+                AgentCapability.KNOWLEDGE_RETRIEVAL,
+                AgentCapability.FUNCTION_CALLING
+            }
+        else:
+            # Default for any other type
+            self.capabilities = {AgentCapability.TEXT_GENERATION}
     
     def add_capability(self, capability: AgentCapability) -> None:
         """Add a capability to the agent."""

@@ -317,7 +317,8 @@ class ConversationMetrics:
     
     average_response_time: float = 0.0
     function_calls_count: int = 0
-    
+    response_time_count: int = 0
+
     def add_message(self, message: Message) -> 'ConversationMetrics':
         """Create new metrics with added message."""
         new_total = self.total_messages + 1
@@ -355,13 +356,9 @@ class ConversationMetrics:
     def update_response_time(self, new_response_time: float) -> 'ConversationMetrics':
         """Create new metrics with updated average response time."""
         # Calculate new average - this should be called AFTER adding the agent message
-        current_agent_count = self.agent_messages
-        if current_agent_count == 0:
-            new_average = new_response_time
-        else:
-            # Calculate new average including the new response
-            total_time = self.average_response_time * current_agent_count
-            new_average = (total_time + new_response_time) / (current_agent_count + 1)
+        new_count = self.response_time_count + 1
+        total_time = self.average_response_time * self.response_time_count
+        new_average = (total_time + new_response_time) / new_count
         
         return ConversationMetrics(
             total_messages=self.total_messages,
@@ -376,7 +373,8 @@ class ConversationMetrics:
             user_audio_duration=self.user_audio_duration,
             agent_audio_duration=self.agent_audio_duration,
             average_response_time=new_average,
-            function_calls_count=self.function_calls_count
+            function_calls_count=self.function_calls_count,
+            response_time_count=new_count
         )
 
 @dataclass
