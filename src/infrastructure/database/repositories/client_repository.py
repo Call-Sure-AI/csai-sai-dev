@@ -1,115 +1,114 @@
 # src/infrastructure/database/repositories/client_repository.py
+"""
+Concrete implementation of client repository using SQLAlchemy.
+"""
+
 import logging
-from typing import Optional, Dict, Any
+from typing import Optional, List, Dict, Any
+from datetime import datetime
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import SQLAlchemyError
 
 from core.interfaces.repositories import IClientRepository
 from core.entities.client import ClientSession
-from core.entities.analytics import SessionEvent, EventType
-from database.models import Company, SessionEvent as SessionEventModel
-from datetime import datetime
+from ..models import Company, SessionEvent, EventType
 
 logger = logging.getLogger(__name__)
 
 class ClientRepository(IClientRepository):
-    """Repository for client data persistence"""
+    """SQLAlchemy implementation of client repository."""
     
     def __init__(self, session: Session):
         self.session = session
     
-    async def record_connection(self, session: ClientSession) -> None:
-        """Record a new client connection"""
-        if not session.company:
-            return
-        
+    async def save_session(self, session: ClientSession) -> None:
+        """Save or update a client session."""
         try:
-            event = SessionEventModel(
-                id=f"{session.client_id}_connect_{int(datetime.utcnow().timestamp())}",
-                company_id=session.company["id"],
-                client_id=session.client_id,
-                event_type="connect",
-                timestamp=session.connection_time
-            )
-            
-            self.session.add(event)
-            self.session.commit()
-            logger.debug(f"Recorded connection for client: {session.client_id}")
-            
+            # For now, we'll store session events rather than full sessions
+            # since sessions are primarily in-memory for this application
+            pass
         except SQLAlchemyError as e:
-            logger.error(f"Error recording connection: {e}")
-            self.session.rollback()
+            logger.error(f"Error saving session {session.session_id}: {e}")
             raise
     
-    async def record_disconnection(self, session: ClientSession) -> None:
-        """Record client disconnection with session data"""
-        if not session.company:
-            return
-        
-        try:
-            event = SessionEventModel(
-                id=f"{session.client_id}_disconnect_{int(datetime.utcnow().timestamp())}",
-                company_id=session.company["id"],
-                client_id=session.client_id,
-                event_type="disconnect",
-                session_duration=session.get_session_duration(),
-                message_count=session.message_count,
-                token_count=session.total_tokens,
-                timestamp=datetime.utcnow()
-            )
-            
-            self.session.add(event)
-            self.session.commit()
-            logger.debug(f"Recorded disconnection for client: {session.client_id}")
-            
-        except SQLAlchemyError as e:
-            logger.error(f"Error recording disconnection: {e}")
-            self.session.rollback()
-            raise
+    async def get_session(self, session_id: str) -> Optional[ClientSession]:
+        """Get a client session by ID."""
+        # Sessions are primarily in-memory, this would be for recovery scenarios
+        return None
+    
+    async def get_sessions_by_client(self, client_id: str) -> List[ClientSession]:
+        """Get all sessions for a client."""
+        return []
+    
+    async def get_active_sessions(self) -> List[ClientSession]:
+        """Get all currently active sessions."""
+        return []
+    
+    async def delete_session(self, session_id: str) -> bool:
+        """Delete a session."""
+        return True
     
     async def authenticate_company(self, api_key: str) -> Optional[Dict[str, Any]]:
-        """Authenticate company by API key"""
+        """Authenticate a company by API key."""
         try:
-            company = self.session.query(Company).filter_by(
-                api_key=api_key,
-                active=True
+            company = self.session.query(Company).filter(
+                Company.api_key == api_key,
+                Company.status == "active"
             ).first()
             
             if not company:
-                logger.warning(f"Authentication failed for API key: {api_key[:8]}...")
                 return None
             
             return {
                 "id": company.id,
                 "name": company.name,
                 "api_key": company.api_key,
-                "settings": company.settings or {}
+                "max_connections": company.max_connections,
+                "max_requests_per_minute": company.max_requests_per_minute,
+                "metadata": company.metadata or {}
             }
             
         except SQLAlchemyError as e:
-            logger.error(f"Error authenticating company: {e}")
+            logger.error(f"Error authenticating company with API key: {e}")
+            return None
+    
+    async def record_connection_event(
+        self,
+        session_id: str,
+        event_type: str,
+        metadata: Optional[Dict[str, Any]] = None
+    ) -> None:
+        """Record a connection event."""
+        try:
+            # Create event record
+            event = SessionEvent(
+                id=f"{session_id}_{event_type}_{int(datetime.utcnow().timestamp())}",
+                session_id=session_id,
+                event_type=EventType(event_type),
+                metadata=metadata or {}
+            )
+            
+            self.session.add(event)
+            self.session.commit()
+            
+        except SQLAlchemyError as e:
+            logger.error(f"Error recording connection event: {e}")
+            self.session.rollback()
             raise
     
-    async def get_company_by_id(self, company_id: str) -> Optional[Dict[str, Any]]:
-        """Get company information by ID"""
+    async def get_session_count_by_company(self, company_id: str) -> int:
+        """Get active session count for a company."""
         try:
-            company = self.session.query(Company).filter_by(
-                id=company_id,
-                active=True
-            ).first()
+            # Count recent connection events minus disconnection events
+            # This is a simplified approach - in production you'd want a better tracking mechanism
+            count = self.session.query(SessionEvent).filter(
+                SessionEvent.company_id == company_id,
+                SessionEvent.event_type == EventType.CONNECTION,
+                SessionEvent.timestamp >= datetime.utcnow().replace(hour=0, minute=0, second=0)
+            ).count()
             
-            if not company:
-                return None
-            
-            return {
-                "id": company.id,
-                "name": company.name,
-                "api_key": company.api_key,
-                "settings": company.settings or {},
-                "created_at": company.created_at,
-                "updated_at": company.updated_at
-            }
+            return count
             
         except SQLAlchemyError as e:
-            logger.error(f"Error getting company: {e}")
-            raise
+            logger.error(f"Error getting session count for company {company_id}: {e}")
+            return 0

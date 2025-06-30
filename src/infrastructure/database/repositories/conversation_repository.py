@@ -1,157 +1,289 @@
+# src/infrastructure/database/repositories/conversation_repository.py
+"""
+Concrete implementation of conversation repository using SQLAlchemy.
+"""
+
 import logging
-from typing import Optional
+from typing import Optional, List, Dict, Any
+from datetime import datetime
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy import desc, and_
 
 from core.interfaces.repositories import IConversationRepository
-from core.entities.conversation import Conversation, ConversationStatus, Message
-from database.models import Conversation as ConversationModel
-from datetime import datetime
-import json
+from core.entities.conversation import Conversation, Message, MessageType as CoreMessageType
+from ..models import ConversationRecord, MessageRecord, MessageType
 
 logger = logging.getLogger(__name__)
 
 class ConversationRepository(IConversationRepository):
-    """Repository for conversation persistence"""
+    """SQLAlchemy implementation of conversation repository."""
     
     def __init__(self, session: Session):
         self.session = session
     
-    async def create_conversation(self, conversation: Conversation) -> str:
-        """Create new conversation and return ID"""
+    async def save_conversation(self, conversation: Conversation) -> None:
+        """Save or update a conversation."""
         try:
-            db_conversation = ConversationModel(
-                id=conversation.id,
-                customer_id=conversation.customer_id,
-                company_id=conversation.company_id,
-                current_agent_id=conversation.agent_id,
-                history=[],
-                meta_data=conversation.context,
-                status="active",
-                created_at=conversation.created_at,
-                updated_at=conversation.updated_at
-            )
+            record = self.session.query(ConversationRecord).filter(
+                ConversationRecord.id == conversation.id
+            ).first()
             
-            self.session.add(db_conversation)
+            if record:
+                # Update existing
+                record.state = conversation.state.value
+                record.context = conversation.context
+                record.updated_at = conversation.updated_at
+                record.message_count = conversation.metrics.total_messages
+                record.total_tokens = conversation.metrics.total_tokens
+                record.voice_duration = conversation.metrics.total_audio_duration
+                
+                if conversation.state.value in ["completed", "terminated"]:
+                    record.ended_at = datetime.utcnow()
+            else:
+                # Create new
+                record = ConversationRecord(
+                    id=conversation.id,
+                    client_id=conversation.client_id,
+                    company_id="unknown",  # Would be set by service layer
+                    agent_id=conversation.agent_id,
+                    title=conversation.title,
+                    state=conversation.state.value,
+                    context=conversation.context,
+                    created_at=conversation.created_at,
+                    updated_at=conversation.updated_at,
+                    message_count=conversation.metrics.total_messages,
+                    total_tokens=conversation.metrics.total_tokens,
+                    voice_duration=conversation.metrics.total_audio_duration
+                )
+                self.session.add(record)
+            
             self.session.commit()
             
-            logger.info(f"Created conversation: {conversation.id}")
-            return conversation.id
-            
         except SQLAlchemyError as e:
-            logger.error(f"Error creating conversation: {e}")
+            logger.error(f"Error saving conversation {conversation.id}: {e}")
             self.session.rollback()
             raise
     
     async def get_conversation(self, conversation_id: str) -> Optional[Conversation]:
-        """Get conversation by ID"""
+        """Get a conversation by ID."""
         try:
-            db_conversation = self.session.query(ConversationModel).filter_by(
-                id=conversation_id
+            record = self.session.query(ConversationRecord).filter(
+                ConversationRecord.id == conversation_id
             ).first()
             
-            if not db_conversation:
+            if not record:
                 return None
             
-            # Convert database model to domain entity
+            # Convert to domain entity
+            from core.entities.conversation import ConversationState
+            
             conversation = Conversation(
-                id=db_conversation.id,
-                customer_id=db_conversation.customer_id,
-                company_id=db_conversation.company_id,
-                agent_id=db_conversation.current_agent_id,
-                status=ConversationStatus(db_conversation.status),
-                context=db_conversation.meta_data or {},
-                created_at=db_conversation.created_at,
-                updated_at=db_conversation.updated_at
+                id=record.id,
+                client_id=record.client_id,
+                agent_id=record.agent_id,
+                title=record.title,
+                created_at=record.created_at,
+                updated_at=record.updated_at
             )
             
-            # Convert history to messages
-            history = db_conversation.history or []
-            for msg_data in history:
-                if isinstance(msg_data, dict):
-                    message = Message(
-                        role=msg_data.get("role", "user"),
-                        content=msg_data.get("content", ""),
-                        timestamp=datetime.fromisoformat(msg_data.get("timestamp", datetime.utcnow().isoformat())),
-                        metadata=msg_data.get("metadata", {}),
-                        tokens=msg_data.get("tokens", 0)
-                    )
-                    conversation.messages.append(message)
+            conversation.state = ConversationState(record.state)
+            conversation.context = record.context or {}
+            
+            # Load messages
+            messages = await self.get_messages(conversation_id)
+            conversation.messages = messages
             
             return conversation
             
         except SQLAlchemyError as e:
-            logger.error(f"Error getting conversation: {e}")
-            raise
+            logger.error(f"Error getting conversation {conversation_id}: {e}")
+            return None
     
-    async def update_conversation(self, conversation: Conversation) -> None:
-        """Update existing conversation"""
+    async def get_conversations_by_client(self, client_id: str) -> List[Conversation]:
+        """Get all conversations for a client."""
         try:
-            db_conversation = self.session.query(ConversationModel).filter_by(
-                id=conversation.id
-            ).first()
+            records = self.session.query(ConversationRecord).filter(
+                ConversationRecord.client_id == client_id
+            ).order_by(desc(ConversationRecord.created_at)).all()
             
-            if not db_conversation:
-                logger.warning(f"Conversation not found for update: {conversation.id}")
-                return
+            conversations = []
+            for record in records:
+                conversation = await self.get_conversation(record.id)
+                if conversation:
+                    conversations.append(conversation)
             
-            # Convert messages to history format
-            history = []
-            for message in conversation.messages:
-                history.append({
-                    "role": message.role,
-                    "content": message.content,
-                    "timestamp": message.timestamp.isoformat(),
-                    "metadata": message.metadata,
-                    "tokens": message.tokens
-                })
-            
-            # Update fields
-            db_conversation.history = history
-            db_conversation.current_agent_id = conversation.agent_id
-            db_conversation.status = conversation.status.value
-            db_conversation.meta_data = conversation.context
-            db_conversation.updated_at = conversation.updated_at
-            db_conversation.messages_count = conversation.message_count
-            
-            self.session.commit()
-            logger.debug(f"Updated conversation: {conversation.id}")
+            return conversations
             
         except SQLAlchemyError as e:
-            logger.error(f"Error updating conversation: {e}")
+            logger.error(f"Error getting conversations for client {client_id}: {e}")
+            return []
+    
+    async def get_conversations_by_agent(self, agent_id: str) -> List[Conversation]:
+        """Get all conversations handled by an agent."""
+        try:
+            records = self.session.query(ConversationRecord).filter(
+                ConversationRecord.agent_id == agent_id
+            ).order_by(desc(ConversationRecord.created_at)).all()
+            
+            conversations = []
+            for record in records:
+                conversation = await self.get_conversation(record.id)
+                if conversation:
+                    conversations.append(conversation)
+            
+            return conversations
+            
+        except SQLAlchemyError as e:
+            logger.error(f"Error getting conversations for agent {agent_id}: {e}")
+            return []
+    
+    async def save_message(self, message: Message) -> None:
+        """Save a message."""
+        try:
+            # Map core message type to database enum
+            db_message_type = MessageType(message.message_type.value)
+            
+            record = MessageRecord(
+                id=message.id,
+                conversation_id=message.conversation_id,
+                message_type=db_message_type,
+                content=message.content,
+                timestamp=message.timestamp,
+                sender_id=message.sender_id,
+                agent_id=message.agent_id,
+                client_id=message.client_id,
+                tokens_used=message.tokens_used,
+                processing_time=message.processing_time,
+                confidence_score=message.confidence_score,
+                audio_duration=message.audio_duration,
+                audio_format=message.audio_format,
+                transcription_confidence=message.transcription_confidence,
+                function_name=message.function_name,
+                function_args=message.function_args,
+                function_result=message.function_result,
+                error_code=message.error_code,
+                error_details=message.error_details,
+                metadata=message.metadata
+            )
+            
+            self.session.add(record)
+            self.session.commit()
+            
+        except SQLAlchemyError as e:
+            logger.error(f"Error saving message {message.id}: {e}")
             self.session.rollback()
             raise
     
-    async def get_or_create_conversation(
-        self, 
-        customer_id: str, 
-        company_id: str, 
-        agent_id: Optional[str] = None
-    ) -> Conversation:
-        """Get existing or create new conversation"""
+    async def get_messages(
+        self,
+        conversation_id: str,
+        limit: Optional[int] = None,
+        offset: Optional[int] = None
+    ) -> List[Message]:
+        """Get messages for a conversation."""
         try:
-            # Try to find existing active conversation
-            db_conversation = self.session.query(ConversationModel).filter_by(
-                customer_id=customer_id,
-                company_id=company_id,
-                status="active"
-            ).order_by(ConversationModel.created_at.desc()).first()
+            query = self.session.query(MessageRecord).filter(
+                MessageRecord.conversation_id == conversation_id
+            ).order_by(MessageRecord.timestamp)
             
-            if db_conversation:
-                # Return existing conversation
-                return await self.get_conversation(db_conversation.id)
+            if offset:
+                query = query.offset(offset)
+            if limit:
+                query = query.limit(limit)
             
-            # Create new conversation
-            conversation = Conversation(
-                id=f"conv_{customer_id}_{int(datetime.utcnow().timestamp())}",
-                customer_id=customer_id,
-                company_id=company_id,
-                agent_id=agent_id
-            )
+            records = query.all()
             
-            await self.create_conversation(conversation)
-            return conversation
+            messages = []
+            for record in records:
+                # Convert to domain entity
+                core_message_type = CoreMessageType(record.message_type.value)
+                
+                message = Message(
+                    id=record.id,
+                    conversation_id=record.conversation_id,
+                    message_type=core_message_type,
+                    content=record.content,
+                    timestamp=record.timestamp,
+                    sender_id=record.sender_id,
+                    agent_id=record.agent_id,
+                    client_id=record.client_id,
+                    metadata=record.metadata or {},
+                    tokens_used=record.tokens_used,
+                    processing_time=record.processing_time,
+                    confidence_score=record.confidence_score,
+                    audio_duration=record.audio_duration,
+                    audio_format=record.audio_format,
+                    transcription_confidence=record.transcription_confidence,
+                    function_name=record.function_name,
+                    function_args=record.function_args,
+                    function_result=record.function_result,
+                    error_code=record.error_code,
+                    error_details=record.error_details
+                )
+                messages.append(message)
+            
+            return messages
             
         except SQLAlchemyError as e:
-            logger.error(f"Error getting or creating conversation: {e}")
-            raise
+            logger.error(f"Error getting messages for conversation {conversation_id}: {e}")
+            return []
+    
+    async def get_recent_conversations(
+        self,
+        limit: int = 10,
+        company_id: Optional[str] = None
+    ) -> List[Conversation]:
+        """Get recent conversations."""
+        try:
+            query = self.session.query(ConversationRecord).order_by(
+                desc(ConversationRecord.created_at)
+            )
+            
+            if company_id:
+                query = query.filter(ConversationRecord.company_id == company_id)
+            
+            records = query.limit(limit).all()
+            
+            conversations = []
+            for record in records:
+                conversation = await self.get_conversation(record.id)
+                if conversation:
+                    conversations.append(conversation)
+            
+            return conversations
+            
+        except SQLAlchemyError as e:
+            logger.error(f"Error getting recent conversations: {e}")
+            return []
+    
+    async def delete_conversation(self, conversation_id: str) -> bool:
+        """Delete a conversation and its messages."""
+        try:
+            # Delete messages first (due to foreign key constraint)
+            self.session.query(MessageRecord).filter(
+                MessageRecord.conversation_id == conversation_id
+            ).delete()
+            
+            # Delete conversation
+            deleted = self.session.query(ConversationRecord).filter(
+                ConversationRecord.id == conversation_id
+            ).delete()
+            
+            self.session.commit()
+            return deleted > 0
+            
+        except SQLAlchemyError as e:
+            logger.error(f"Error deleting conversation {conversation_id}: {e}")
+            self.session.rollback()
+            return False
+    
+    async def search_conversations(
+        self,
+        query: str,
+        filters: Optional[Dict[str, Any]] = None
+    ) -> List[Conversation]:
+        """Search conversations by content or metadata."""
+        # This would require full-text search capabilities
+        # For now, return empty list as placeholder
+        return []
